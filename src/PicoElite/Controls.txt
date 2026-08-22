@@ -1,0 +1,35 @@
+Center / Enter / Space — launch
+L — load
+Back — quit
+
+Flight
+Arrows or W / S — pitch
+Arrows or A — yaw (left)
+Q / E — roll
+Center / Space — thrust
+F — laser
+M — missile
+H — hyperspace (same galaxy)
+D — dock (close + slow)
+Back — title
+
+Screens
+1 Status
+2 System
+3 Local chart
+4 Save
+5 Missions
+6 Galaxy map
+7 News
+
+Market (when docked)
+Up / Down — goods or equipment
+Center — buy
+0 or S — sell
+Back — leave
+
+Missions / Galaxy
+Up / Down — select
+Center — accept contract, or jump galaxy (200 Cr)
+
+D is dock, not yaw-right. Use the right arrow to yaw right.
