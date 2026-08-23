@@ -27,10 +27,12 @@ from picoware.system.vector import Vector
 from picoware.gui.keyboard import Keyboard
 
 APP = "PiBrowse"
-CACHE_DIR = "picoware/cache"
-CACHE_HTML = "picoware/cache/pb_page.html"
-CACHE_TXT = "picoware/cache/pb_page.txt"
-CACHE_LNK = "picoware/cache/pb_page.lnk"
+CACHE_DIR = "pibrowse"
+CACHE_HTML = "pibrowse/page.html"
+CACHE_TXT = "pibrowse/page.txt"
+CACHE_LNK = "pibrowse/page.lnk"
+CACHE_META = "pibrowse/page.meta"
+HIST_MAX = 6
 
 MAX_HTML = 32 * 1024
 MAX_TXT = 8 * 1024
@@ -38,10 +40,12 @@ MAX_LINKS = 24
 MAX_LINES = 160
 CHUNK = 256
 WRAP = 38
-ROWS = 12
-Y_LIST = 40
+ROWS = 15
+Y_LIST = 20
 ROW_H = 18
-FOOT_Y = 304
+STAT1_Y = 288
+STAT2_Y = 304
+BAR_X = 318
 
 HEADERS = {
     "User-Agent": "Lynx/2.9.2 libwww-FM/2.14",
@@ -241,15 +245,18 @@ _scroll = 0
 _url = ""
 _title = APP
 _hist = []
+_hslot = 0
 _offs = []
 _page = []
 _links = 0
 _fallback = 0
 _last_err = ""
+_rate_bps = 0
+_got_bytes = 0
 
 
 def start(vm) -> bool:
-    global _http, _hist, _url, _title, _offs, _links
+    global _http, _hist, _url, _title, _offs, _links, _hslot
     wifi = vm.wifi
     if not wifi:
         vm.alert("No Wi-Fi on this board.", False)
@@ -264,6 +271,7 @@ def start(vm) -> bool:
         pass
     _http = None
     _hist = []
+    _hslot = 0
     _url = ""
     _title = APP
     _offs = []
@@ -294,6 +302,7 @@ def stop(vm) -> None:
     _close_http()
     _kb = None
     _hist = []
+    globals()["_hslot"] = 0
     _offs = []
     globals()["_page"] = []
     _items = []
@@ -312,18 +321,67 @@ def _close_http():
         _http = None
 
 
-def _bar(vm, addr, foot):
+def _fmt_kb(bps):
+    if not bps or bps < 0:
+        return "0.0"
+    tenths = int(bps / 100.0 + 0.5)  # bytes/s -> 0.1 KB/s
+    if tenths > 999:
+        tenths = 999
+    return "%d.%d" % (tenths // 10, tenths % 10)
+
+
+def _fmt_kb_total(n):
+    if not n or n < 0:
+        return "0.0"
+    tenths = int(n / 100.0 + 0.5)
+    if tenths > 9999:
+        tenths = 9999
+    return "%d.%d" % (tenths // 10, tenths % 10)
+
+
+def _bar(vm, addr, row3, row4, foot=""):
     d = vm.draw
+    fg = vm.foreground_color
     hi = vm.selected_color
     d.fill_rectangle(Vector(0, 0), Vector(320, 320), vm.background_color)
+    # site bar — top
     d.fill_rectangle(Vector(0, 0), Vector(320, 18), hi)
-    d.text(Vector(4, 2), APP, TFT_WHITE, FONT_SMALL)
+    d.text(Vector(4, 3), _clip(addr or APP, 36), TFT_WHITE, FONT_SMALL)
     if _hist:
-        d.text(Vector(300, 2), "<", TFT_WHITE, FONT_SMALL)
-    d.fill_rectangle(Vector(2, 20), Vector(316, 16), hi)
-    d.text(Vector(6, 22), _clip(addr, 38), TFT_WHITE, FONT_SMALL)
-    d.fill_rectangle(Vector(0, FOOT_Y), Vector(320, 16), hi)
-    d.text(Vector(4, FOOT_Y + 2), _clip(foot, 38), TFT_WHITE, FONT_SMALL)
+        d.text(Vector(304, 3), "<", TFT_WHITE, FONT_SMALL)
+    # status bars — bottom
+    d.fill_rectangle(Vector(0, STAT1_Y), Vector(320, 16), hi)
+    d.text(Vector(4, STAT1_Y + 2), _clip(row3 or "", 38), TFT_WHITE, FONT_SMALL)
+    d.fill_rectangle(Vector(0, STAT2_Y), Vector(320, 16), hi)
+    line4 = row4 or ""
+    if foot:
+        if line4:
+            line4 = _clip(line4, 16) + "  " + foot
+        else:
+            line4 = foot
+    d.text(Vector(4, STAT2_Y + 2), _clip(line4, 38), TFT_WHITE, FONT_SMALL)
+
+
+def _scrollbar(d, color, top, total, vis, y0, y1):
+    h = y1 - y0
+    if h < 8:
+        return
+    d.fill_rectangle(Vector(BAR_X, y0), Vector(2, h), TFT_WHITE)
+    if total <= vis or total <= 1:
+        d.fill_rectangle(Vector(BAR_X, y0), Vector(2, h), color)
+        return
+    thumb = h * vis // total
+    if thumb < 6:
+        thumb = 6
+    if thumb > h:
+        thumb = h
+    span = total - vis
+    if span < 1:
+        span = 1
+    pos = y0 + (h - thumb) * top // span
+    if pos + thumb > y1:
+        pos = y1 - thumb
+    d.fill_rectangle(Vector(BAR_X, pos), Vector(2, thumb), color)
 
 
 def _clip(s, n):
@@ -335,7 +393,8 @@ def _clip(s, n):
 
 def _paint_list(vm, addr, foot):
     global _scroll
-    _bar(vm, addr, foot)
+    n = len(_items)
+    _bar(vm, addr, "%d/%d" % (_sel + 1 if n else 0, n), "", foot)
     d = vm.draw
     fg = vm.foreground_color
     hi = vm.selected_color
@@ -360,27 +419,31 @@ def _paint_list(vm, addr, foot):
             d.text(Vector(8, y + 2), label, fg)
         y += ROW_H
         i += 1
+    _scrollbar(d, hi, top, n, vis, Y_LIST, STAT1_Y - 2)
     d.swap()
 
 
 def _paint_page(vm):
     total = _line_count() or 1
-    foot = "%d/%d  Up/Dn scroll  F10 links" % (_scroll + 1, total)
-    _bar(vm, _url, foot)
+    row3 = "%d/%d   %d links" % (_scroll + 1, total, _links)
+    row4 = "%s kb" % _fmt_kb(_rate_bps)
+    _bar(vm, _url, row3, row4, "Up/Dn scroll   F10 links")
     d = vm.draw
     fg = vm.foreground_color
     y = Y_LIST
     for line in _read_lines(vm.storage, _scroll, ROWS):
         d.text(Vector(4, y), _clip(line, WRAP), fg, FONT_SMALL)
         y += 16
-        if y >= FOOT_Y - 2:
+        if y >= STAT1_Y - 2:
             break
+    _scrollbar(d, vm.selected_color, _scroll, total, ROWS, Y_LIST, STAT1_Y - 2)
     d.swap()
 
 
 def _paint_load(vm, text):
-    _bar(vm, _url or "", "Back cancels")
-    vm.draw.text(Vector(8, 80), text, vm.foreground_color)
+    row3 = text or "Downloading"
+    row4 = "%s kb   %s KB" % (_fmt_kb(_rate_bps), _fmt_kb_total(_got_bytes))
+    _bar(vm, _url or "", row3, row4, "Back cancels")
     vm.draw.swap()
 
 
@@ -538,7 +601,7 @@ def _run_keys(vm):
 
 
 def _kb_cancel(vm):
-    if _key_back == PAGE and _offs:
+    if _key_back == PAGE and _page:
         _show_page(vm)
     elif _key_back == DIR:
         _show_dir(vm)
@@ -562,17 +625,14 @@ def _norm(raw):
 
 
 def _go(vm, raw, push=True):
-    global _url, _fallback
+    global _fallback
     url = _norm(raw)
     if not url:
         vm.alert("Empty address", False)
         _show_home(vm)
         return
-    if push and _url and _url.startswith("http") and _url != url:
-        if not _hist or _hist[-1] != _url:
-            _hist.append(_url)
-            if len(_hist) > 8:
-                del _hist[0]
+    if push:
+        _push_snap(vm.storage)
     _fallback = 0
     _start_fetch(vm, url)
 
@@ -662,6 +722,20 @@ def _try_fallback(vm):
     return False
 
 
+def _pull_http_stats():
+    global _rate_bps, _got_bytes
+    if _http is None:
+        return
+    try:
+        _rate_bps = int(_http.download_speed or 0)
+    except Exception:
+        pass
+    try:
+        _got_bytes = int(_http.downloaded_bytes or 0)
+    except Exception:
+        pass
+
+
 def _run_load(vm):
     global _last_err
     btn = vm.input_manager.button
@@ -671,6 +745,8 @@ def _run_load(vm):
         _show_home(vm)
         return
     if _http is None or not _http.is_finished:
+        _pull_http_stats()
+        _paint_load(vm, "Downloading")
         return
     ok = False
     err = "Download failed"
@@ -688,6 +764,7 @@ def _run_load(vm):
                 ok = True
     except Exception:
         ok = False
+    _pull_http_stats()
     _close_http()
     collect()
     saved = _file_has_text(vm.storage)
@@ -752,12 +829,113 @@ def _run_page(vm):
         _back(vm)
 
 
+def _snap_paths(slot):
+    return (
+        "pibrowse/b%d.txt" % slot,
+        "pibrowse/b%d.lnk" % slot,
+        "pibrowse/b%d.meta" % slot,
+    )
+
+
+def _push_snap(st):
+    global _hslot, _hist
+    if not _page:
+        return
+    if not _url or not _url.startswith("http"):
+        return
+    slot = _hslot
+    _hslot = (_hslot + 1) % HIST_MAX
+    txt, lnk, meta = _snap_paths(slot)
+    body = ""
+    i = 0
+    while i < len(_page):
+        body += _page[i] + "\n"
+        i += 1
+    try:
+        _write(st, txt, body, "w")
+    except Exception:
+        return
+    blob = ""
+    try:
+        if st.exists(CACHE_LNK):
+            raw = _read_at(st, CACHE_LNK, 0, 2500)
+            blob = raw.decode("utf-8", "ignore")
+    except Exception:
+        blob = ""
+    try:
+        _write(st, lnk, blob, "w")
+        _write(st, meta, (_title or APP) + "\n" + _url + "\n", "w")
+    except Exception:
+        pass
+    _hist.append(slot)
+    if len(_hist) > HIST_MAX:
+        del _hist[0]
+    collect()
+
+
+def _load_snap(st, slot):
+    global _url, _title, _page, _links
+    txt, lnk, meta = _snap_paths(slot)
+    try:
+        if not st.exists(txt):
+            return False
+    except Exception:
+        return False
+    raw = _read_at(st, txt, 0, MAX_TXT + 200)
+    if not raw:
+        return False
+    try:
+        text = raw.decode("utf-8", "ignore")
+    except Exception:
+        text = raw.decode("latin-1")
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines = lines[:-1]
+    if not lines:
+        return False
+    _page = lines
+    title = APP
+    url = ""
+    try:
+        if st.exists(meta):
+            m = _read_at(st, meta, 0, 400).decode("utf-8", "ignore").split("\n")
+            if m:
+                title = m[0] or APP
+            if len(m) > 1:
+                url = m[1]
+    except Exception:
+        pass
+    _title = title
+    if url:
+        _url = url
+    try:
+        if st.exists(lnk):
+            data = _read_at(st, lnk, 0, 2500)
+            try:
+                _write(st, CACHE_LNK, data.decode("utf-8", "ignore"), "w")
+            except Exception:
+                pass
+            n = 0
+            for row in data.decode("utf-8", "ignore").split("\n"):
+                if row:
+                    n += 1
+            _links = n
+        else:
+            _links = 0
+            _write(st, CACHE_LNK, "", "w")
+    except Exception:
+        _links = 0
+    collect()
+    return True
+
+
 def _back(vm):
     if _hist:
-        prev = _hist.pop()
-        _go(vm, prev, push=False)
-    else:
-        _show_home(vm)
+        slot = _hist.pop()
+        if _load_snap(vm.storage, slot):
+            _show_page(vm)
+            return
+    _show_home(vm)
 
 
 def _write(st, path, data, mode="w"):
