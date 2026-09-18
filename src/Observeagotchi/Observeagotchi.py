@@ -3,8 +3,9 @@
 # INSCCOIN 2026
 # Ported from SharkDeck Observergotchi.
 # Inspired by Pwnagotchi, but 100% passive and legal: scan / observe only.
-# VERSION 1.1
+# VERSION 1.2
 # HOURS SPENT HERE: 14
+
 
 from picoware.system.buttons import (
     BUTTON_A,
@@ -892,17 +893,29 @@ def start(view_manager):
         _save_pet(vm, pet)
     except Exception:
         pass
-    _paint(vm)
+    try:
+        _paint(vm)
+    except Exception:
+        pass
     _reset_input(vm)
+    return True
 
 
 def stop(view_manager):
     pet = _state["pet"]
     if pet is not None:
-        pet.update_time()
-        _save_pet(view_manager, pet)
+        try:
+            pet.update_time()
+            _save_pet(view_manager, pet)
+        except Exception:
+            pass
     _state["pet"] = None
     _state["kb"] = None
+    try:
+        from gc import collect
+        collect()
+    except Exception:
+        pass
 
 
 def run(view_manager):
