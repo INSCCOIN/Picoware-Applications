@@ -3,8 +3,8 @@
 # INSCCOIN 2026
 # Ported from SharkDeck Observergotchi.
 # Inspired by Pwnagotchi, but 100% passive and legal: scan / observe only.
-# VERSION 1.2
-# HOURS SPENT HERE: 14
+# VERSION 1.3
+# HOURS SPENT HERE: 15
 
 
 from picoware.system.buttons import (
@@ -116,6 +116,9 @@ _state = {
     "page": 0,
     "boot_ignore": 0,
     "paint_ok": True,
+    "thought": "",
+    "thought_ms": 0,
+    "blink_shut": False,
 }
 
 
@@ -529,6 +532,7 @@ def _observe(pet, networks):
     else:
         pet.mood = random.choice(("happy", "curious", "cool"))
     pet.energy = _clamp(pet.energy - 1, 10, 100)
+    _set_thought(pet, True)
     return new_ssids, new_bssids, open_count
 
 
@@ -563,6 +567,30 @@ def _toast(msg):
     _state["toast"] = msg
     _state["toast_ms"] = _ticks()
     _state["dirty"] = True
+
+
+def _set_thought(pet, force=False):
+    now = _ticks()
+    last = _state.get("thought_ms") or 0
+    if force or not _state.get("thought") or _ticks_diff(now, last) > 12000:
+        try:
+            _state["thought"] = pet.speak()
+        except Exception:
+            _state["thought"] = "watching the airwaves..."
+        _state["thought_ms"] = now
+    return _state["thought"]
+
+
+def _text_w(draw, text, font):
+    try:
+        n = draw.len(text, font)
+        if n:
+            return int(n)
+    except Exception:
+        pass
+    if font == FONT_XTRA_SMALL:
+        return 6 * len(text)
+    return 10 * len(text)
 
 
 def _bar(draw, x, y, w, h, pct, fill, back=DIM):
@@ -627,63 +655,73 @@ def _draw_creature(draw, cx, cy, pet, blink):
 
 
 def _hdr(draw, title, right):
-    draw.fill_rectangle(Vector(0, 0), Vector(320, 18), ACCENT)
-    draw.text(Vector(6, 2), title, TFT_BLACK, FONT_SMALL)
+    draw.fill_rectangle(Vector(0, 0), Vector(320, 22), ACCENT)
+    draw.text(Vector(6, 4), title, TFT_BLACK, FONT_XTRA_SMALL)
     if right:
-        tw = 6 * len(right)
-        draw.text(Vector(314 - tw, 2), right, TFT_BLACK, FONT_SMALL)
+        tw = _text_w(draw, right, FONT_XTRA_SMALL)
+        x = 320 - tw - 8
+        if x < 160:
+            x = 160
+        draw.text(Vector(x, 4), right, TFT_BLACK, FONT_XTRA_SMALL)
 
 
 def _ftr(draw, line):
-    draw.fill_rectangle(Vector(0, 304), Vector(320, 16), ACCENT)
-    draw.text(Vector(4, 306), line, TFT_BLACK, FONT_XTRA_SMALL)
+    draw.fill_rectangle(Vector(0, 302), Vector(320, 18), ACCENT)
+    draw.text(Vector(6, 306), line, TFT_BLACK, FONT_XTRA_SMALL)
 
 
 def _paint_face(vm):
     draw = vm.draw
     pet = _state["pet"]
     draw.fill_screen(BG)
-    auto = "AUTO %ds" % _state["interval"] if _state["auto"] else "MANUAL"
+    auto = "auto %ds" % _state["interval"] if _state["auto"] else "manual"
     _hdr(draw, "OBSERVERGOTCHI", auto)
-    blink = (_state["blink"] % 48) > 44
-    _draw_creature(draw, 160, 78, pet, blink)
+    blink = bool(_state.get("blink_shut"))
+    _draw_creature(draw, 160, 82, pet, blink)
     face = pet.get_face()
-    draw.text(Vector(160 - 3 * len(face), 118), face, FG, FONT_SMALL)
+    fw = _text_w(draw, face, FONT_SMALL)
+    draw.text(Vector(max(8, (320 - fw) // 2), 122), face, FG, FONT_SMALL)
     age_days = float(pet.age_hours) / 24.0
-    draw.text(Vector(8, 138), pet.name, GOLD, FONT_SMALL)
-    draw.text(Vector(8, 158), "age %.1fd   %s" % (age_days, pet.mood), FG, FONT_SMALL)
-    y = 178
+    draw.text(Vector(10, 144), pet.name, GOLD, FONT_SMALL)
+    draw.text(Vector(10, 162), "age %.1fd  %s" % (age_days, pet.mood), FG, FONT_XTRA_SMALL)
+    y = 182
     for label, val, col in (
         ("BRD", pet.boredom, WARN),
         ("XCT", pet.excitement, INFO),
         ("NRG", pet.energy, ACCENT),
     ):
-        draw.text(Vector(8, y - 1), label, DIM, FONT_XTRA_SMALL)
-        _bar(draw, 36, y, 276, 10, val, col)
-        y += 14
+        draw.text(Vector(10, y), label, DIM, FONT_XTRA_SMALL)
+        _bar(draw, 40, y + 1, 270, 10, val, col)
+        y += 16
     draw.text(
-        Vector(8, y + 2),
+        Vector(10, y + 2),
         "scans %d   ssid %d   bssid %d"
         % (pet.scans_done, len(pet.unique_ssids), len(pet.unique_bssids)),
         FG,
         FONT_XTRA_SMALL,
     )
     draw.text(
-        Vector(8, y + 16),
+        Vector(10, y + 16),
         "open %d   wpa3 %d   wow %d   last %d"
         % (pet.open_networks, pet.wpa3_networks, pet.interesting_found, pet.last_scan_count),
         FG,
         FONT_XTRA_SMALL,
     )
-    thought = _state["toast"] if _state["toast"] else pet.speak()
-    if len(thought) > 42:
-        thought = thought[:41] + ".."
-    draw.rect(Vector(6, 246), Vector(308, 36), DIM)
-    draw.text(Vector(12, 252), '"' + thought + '"', INFO, FONT_XTRA_SMALL)
-    draw.text(Vector(12, 266), _state["status"], DIM, FONT_XTRA_SMALL)
+    if _state["toast"]:
+        thought = _state["toast"]
+    else:
+        thought = _set_thought(pet, False)
+    if len(thought) > 38:
+        thought = thought[:37] + ".."
+    draw.rect(Vector(8, 248), Vector(304, 48), DIM)
+    draw.text(Vector(14, 254), '"' + thought + '"', INFO, FONT_XTRA_SMALL)
+    status = _state["status"] or ""
+    if len(status) > 38:
+        status = status[:37] + ".."
+    draw.text(Vector(14, 272), status, DIM, FONT_XTRA_SMALL)
     if not _state["has_wifi"]:
-        draw.text(Vector(12, 280), "no wifi radio — pet still lives", WARN, FONT_XTRA_SMALL)
-    _ftr(draw, "S scan  A auto  L list  R name  H help  BACK quit")
+        draw.text(Vector(14, 286), "no wifi radio", WARN, FONT_XTRA_SMALL)
+    _ftr(draw, "S scan  A auto  L list  R name  H help")
     draw.swap()
 
 
@@ -841,6 +879,7 @@ def _pet_it(pet):
     pet.excitement = _clamp(pet.excitement + 4, 0, 100)
     if pet.energy >= 20:
         pet.mood = "happy"
+    _set_thought(pet, True)
     _toast("%s purrs at the spectrum." % pet.name)
 
 
@@ -889,6 +928,10 @@ def start(view_manager):
     _state["page"] = 0
     _state["has_wifi"] = has_wifi
     _state["boot_ignore"] = 18
+    _state["thought"] = ""
+    _state["thought_ms"] = 0
+    _state["blink_shut"] = False
+    _set_thought(pet, True)
     try:
         _save_pet(vm, pet)
     except Exception:
@@ -934,11 +977,13 @@ def run(view_manager):
         _state["boot_ignore"] = ignore - 1
         if btn != BUTTON_NONE:
             _reset_input(vm)
-        if _state["dirty"] or (_state["blink"] % 12) == 0:
-            _state["blink"] += 1
+        _state["blink"] += 1
+        shut = (_state["blink"] % 80) > 74
+        if shut != _state.get("blink_shut"):
+            _state["blink_shut"] = shut
+            _state["dirty"] = True
+        if _state["dirty"]:
             _paint(vm)
-        else:
-            _state["blink"] += 1
         return
 
     if _state["mode"] == "rename":
@@ -972,8 +1017,11 @@ def run(view_manager):
         _state["dirty"] = True
 
     _state["blink"] += 1
-    if _state["mode"] == "face" and (_state["blink"] % 12) == 0:
-        _state["dirty"] = True
+    if _state["mode"] == "face":
+        shut = (_state["blink"] % 80) > 74
+        if shut != _state.get("blink_shut"):
+            _state["blink_shut"] = shut
+            _state["dirty"] = True
 
     if _state["auto"] and not _state["scanning"] and _state["mode"] == "face":
         gap = _state["interval"] * 1000
@@ -981,8 +1029,9 @@ def run(view_manager):
             _do_scan(vm)
             return
 
-    if (_state["blink"] % 90) == 0:
+    if (_state["blink"] % 200) == 0:
         pet.update_time()
+        _set_thought(pet, False)
         _state["dirty"] = True
 
     if btn == BUTTON_NONE:
