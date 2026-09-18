@@ -3,8 +3,9 @@
 # INSCCOIN 2026
 # Ported from SharkDeck Observergotchi.
 # Inspired by Pwnagotchi, but 100% passive: scan / observe only.
-# VERSION 1.4
+# VERSION 1.5
 # HOURS SPENT HERE: 15
+
 
 from picoware.system.buttons import (
     BUTTON_A,
@@ -110,6 +111,7 @@ _state = {
     "toast_ms": 0,
     "kb": None,
     "blink": 0,
+    "blink_ms": 0,
     "last_new": (0, 0, 0),
     "has_wifi": True,
     "page": 0,
@@ -568,6 +570,28 @@ def _toast(msg):
     _state["dirty"] = True
 
 
+BLINK_EVERY_MS = 4200
+BLINK_SHUT_MS = 280
+
+
+def _pulse_blink(now):
+    if _state["mode"] != "face":
+        return
+    start = _state.get("blink_ms") or 0
+    if start == 0:
+        _state["blink_ms"] = now
+        return
+    age = _ticks_diff(now, start)
+    if age < 0:
+        _state["blink_ms"] = now
+        return
+    phase = age % BLINK_EVERY_MS
+    shut = phase < BLINK_SHUT_MS
+    if shut != _state.get("blink_shut"):
+        _state["blink_shut"] = shut
+        _state["dirty"] = True
+
+
 def _set_thought(pet, force=False):
     if not force and _state.get("thought"):
         return _state["thought"]
@@ -923,12 +947,14 @@ def start(view_manager):
     _state["status"] = "press S to observe"
     _state["kb"] = None
     _state["blink"] = 0
+    _state["blink_ms"] = _ticks()
     _state["page"] = 0
     _state["has_wifi"] = has_wifi
     _state["boot_ignore"] = 18
     _state["thought"] = ""
     _state["thought_ms"] = 0
     _state["blink_shut"] = False
+    _state["age_ms"] = _ticks()
     _set_thought(pet, True)
     try:
         _save_pet(vm, pet)
@@ -975,11 +1001,7 @@ def run(view_manager):
         _state["boot_ignore"] = ignore - 1
         if btn != BUTTON_NONE:
             _reset_input(vm)
-        _state["blink"] += 1
-        shut = (_state["blink"] % 80) > 74
-        if shut != _state.get("blink_shut"):
-            _state["blink_shut"] = shut
-            _state["dirty"] = True
+        _pulse_blink(now)
         if _state["dirty"]:
             _paint(vm)
         return
@@ -1014,12 +1036,7 @@ def run(view_manager):
         _state["toast"] = ""
         _state["dirty"] = True
 
-    _state["blink"] += 1
-    if _state["mode"] == "face":
-        shut = (_state["blink"] % 80) > 74
-        if shut != _state.get("blink_shut"):
-            _state["blink_shut"] = shut
-            _state["dirty"] = True
+    _pulse_blink(now)
 
     if _state["auto"] and not _state["scanning"] and _state["mode"] == "face":
         gap = _state["interval"] * 1000
@@ -1027,8 +1044,9 @@ def run(view_manager):
             _do_scan(vm)
             return
 
-    if (_state["blink"] % 200) == 0:
+    if _ticks_diff(now, _state.get("age_ms") or 0) > 30000:
         pet.update_time()
+        _state["age_ms"] = now
 
     if btn == BUTTON_NONE:
         if _state["dirty"]:
