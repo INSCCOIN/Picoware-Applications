@@ -2,10 +2,9 @@
 # Copy to /picoware/apps/observergotchi.py
 # INSCCOIN 2026
 # Ported from SharkDeck Observergotchi.
-# Inspired by Pwnagotchi, but 100% passive and legal: scan / observe only.
-# VERSION 1.3
+# Inspired by Pwnagotchi, but 100% passive: scan / observe only.
+# VERSION 1.4
 # HOURS SPENT HERE: 15
-
 
 from picoware.system.buttons import (
     BUTTON_A,
@@ -570,14 +569,13 @@ def _toast(msg):
 
 
 def _set_thought(pet, force=False):
-    now = _ticks()
-    last = _state.get("thought_ms") or 0
-    if force or not _state.get("thought") or _ticks_diff(now, last) > 12000:
-        try:
-            _state["thought"] = pet.speak()
-        except Exception:
-            _state["thought"] = "watching the airwaves..."
-        _state["thought_ms"] = now
+    if not force and _state.get("thought"):
+        return _state["thought"]
+    try:
+        _state["thought"] = pet.speak()
+    except Exception:
+        _state["thought"] = "watching the airwaves..."
+    _state["thought_ms"] = _ticks()
     return _state["thought"]
 
 
@@ -710,7 +708,7 @@ def _paint_face(vm):
     if _state["toast"]:
         thought = _state["toast"]
     else:
-        thought = _set_thought(pet, False)
+        thought = _state.get("thought") or ""
     if len(thought) > 38:
         thought = thought[:37] + ".."
     draw.rect(Vector(8, 248), Vector(304, 48), DIM)
@@ -1031,8 +1029,6 @@ def run(view_manager):
 
     if (_state["blink"] % 200) == 0:
         pet.update_time()
-        _set_thought(pet, False)
-        _state["dirty"] = True
 
     if btn == BUTTON_NONE:
         if _state["dirty"]:
