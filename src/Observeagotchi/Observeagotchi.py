@@ -3,8 +3,8 @@
 # INSCCOIN 2026
 # Ported from SharkDeck Observergotchi.
 # Inspired by Pwnagotchi, but 100% passive and legal: scan / observe only.
-# VERSION 1.0
-# HOURS SPENT HERE: 13
+# VERSION 1.1
+# HOURS SPENT HERE: 14
 
 from picoware.system.buttons import (
     BUTTON_A,
@@ -36,11 +36,17 @@ from picoware.system.colors import (
 )
 from picoware.system.font import FONT_MEDIUM, FONT_SMALL, FONT_XTRA_SMALL
 from picoware.system.vector import Vector
-from picoware.gui.keyboard import Keyboard
 
 import json
 import random
 import time
+
+Keyboard = None
+try:
+    from picoware.gui.keyboard import Keyboard as _Keyboard
+    Keyboard = _Keyboard
+except Exception:
+    Keyboard = None
 
 try:
     from picoware.system.boards import BOARD_HAS_WIFI
@@ -107,6 +113,8 @@ _state = {
     "last_new": (0, 0, 0),
     "has_wifi": True,
     "page": 0,
+    "boot_ignore": 0,
+    "paint_ok": True,
 }
 
 
@@ -565,6 +573,10 @@ def _bar(draw, x, y, w, h, pct, fill, back=DIM):
         draw.fill_rectangle(Vector(x + 1 + inner, y + 1), Vector((w - 2) - inner, h - 2), back)
 
 
+def _blob(draw, x, y, w, h, color):
+    draw.fill_rectangle(Vector(x, y), Vector(w, h), color)
+
+
 def _draw_creature(draw, cx, cy, pet, blink):
     mood = pet.mood
     if pet.energy < 20:
@@ -582,49 +594,35 @@ def _draw_creature(draw, cx, cy, pet, blink):
         body = DIM
     elif mood == "sad":
         body = ALERT
-    r = 36
-    draw.fill_circle(Vector(cx, cy), r, body)
-    draw.circle(Vector(cx, cy), r, FG)
-    draw.circle(Vector(cx, cy), r - 1, FG)
-    ear_y = cy - r + 4
-    draw.fill_circle(Vector(cx - 22, ear_y), 8, body)
-    draw.fill_circle(Vector(cx + 22, ear_y), 8, body)
-    draw.circle(Vector(cx - 22, ear_y), 8, FG)
-    draw.circle(Vector(cx + 22, ear_y), 8, FG)
+    _blob(draw, cx - 28, cy - 24, 56, 48, body)
+    draw.rect(Vector(cx - 28, cy - 24), Vector(56, 48), FG)
+    _blob(draw, cx - 22, cy - 32, 12, 12, body)
+    _blob(draw, cx + 10, cy - 32, 12, 12, body)
+    draw.rect(Vector(cx - 22, cy - 32), Vector(12, 12), FG)
+    draw.rect(Vector(cx + 10, cy - 32), Vector(12, 12), FG)
     closed = blink or mood == "sleeping"
     ey = cy - 8
     if closed:
-        draw.line_custom(Vector(cx - 16, ey), Vector(cx - 6, ey), TFT_BLACK)
-        draw.line_custom(Vector(cx + 6, ey), Vector(cx + 16, ey), TFT_BLACK)
-    elif mood == "curious":
-        draw.fill_circle(Vector(cx - 11, ey), 5, TFT_BLACK)
-        draw.fill_circle(Vector(cx + 11, ey - 2), 6, TFT_BLACK)
-        draw.fill_circle(Vector(cx - 10, ey - 1), 2, TFT_WHITE)
-        draw.fill_circle(Vector(cx + 12, ey - 3), 2, TFT_WHITE)
-    elif mood == "surprised" or mood == "excited":
-        draw.fill_circle(Vector(cx - 11, ey), 7, TFT_BLACK)
-        draw.fill_circle(Vector(cx + 11, ey), 7, TFT_BLACK)
-        draw.fill_circle(Vector(cx - 10, ey - 2), 2, TFT_WHITE)
-        draw.fill_circle(Vector(cx + 12, ey - 2), 2, TFT_WHITE)
+        _blob(draw, cx - 16, ey, 10, 2, TFT_BLACK)
+        _blob(draw, cx + 6, ey, 10, 2, TFT_BLACK)
     else:
-        draw.fill_circle(Vector(cx - 11, ey), 5, TFT_BLACK)
-        draw.fill_circle(Vector(cx + 11, ey), 5, TFT_BLACK)
-        draw.fill_circle(Vector(cx - 10, ey - 1), 2, TFT_WHITE)
-        draw.fill_circle(Vector(cx + 12, ey - 1), 2, TFT_WHITE)
+        _blob(draw, cx - 16, ey - 4, 10, 10, TFT_BLACK)
+        _blob(draw, cx + 6, ey - 4, 10, 10, TFT_BLACK)
+        _blob(draw, cx - 14, ey - 3, 3, 3, TFT_WHITE)
+        _blob(draw, cx + 8, ey - 3, 3, 3, TFT_WHITE)
     my = cy + 12
     if mood == "happy" or mood == "excited" or mood == "love":
-        draw.line_custom(Vector(cx - 10, my), Vector(cx, my + 7), TFT_BLACK)
-        draw.line_custom(Vector(cx, my + 7), Vector(cx + 10, my), TFT_BLACK)
+        _blob(draw, cx - 10, my, 20, 2, TFT_BLACK)
+        _blob(draw, cx - 4, my + 2, 8, 4, TFT_BLACK)
     elif mood == "sad" or mood == "bored":
-        draw.line_custom(Vector(cx - 10, my + 4), Vector(cx, my - 2), TFT_BLACK)
-        draw.line_custom(Vector(cx, my - 2), Vector(cx + 10, my + 4), TFT_BLACK)
+        _blob(draw, cx - 10, my + 4, 20, 2, TFT_BLACK)
     elif mood == "sleeping":
-        draw.line_custom(Vector(cx - 8, my), Vector(cx + 8, my), TFT_BLACK)
-        draw.text(Vector(cx + r - 4, cy - r - 4), "z", DIM, FONT_SMALL)
+        _blob(draw, cx - 8, my, 16, 2, TFT_BLACK)
+        draw.text(Vector(cx + 30, cy - 28), "z", DIM, FONT_SMALL)
     elif mood == "surprised":
-        draw.circle(Vector(cx, my + 2), 5, TFT_BLACK)
+        _blob(draw, cx - 4, my, 8, 8, TFT_BLACK)
     else:
-        draw.line_custom(Vector(cx - 8, my + 2), Vector(cx + 8, my + 2), TFT_BLACK)
+        _blob(draw, cx - 8, my + 2, 16, 2, TFT_BLACK)
 
 
 def _hdr(draw, title, right):
@@ -651,7 +649,7 @@ def _paint_face(vm):
     face = pet.get_face()
     draw.text(Vector(160 - 3 * len(face), 118), face, FG, FONT_SMALL)
     age_days = float(pet.age_hours) / 24.0
-    draw.text(Vector(8, 138), pet.name, GOLD, FONT_MEDIUM)
+    draw.text(Vector(8, 138), pet.name, GOLD, FONT_SMALL)
     draw.text(Vector(8, 158), "age %.1fd   %s" % (age_days, pet.mood), FG, FONT_SMALL)
     y = 178
     for label, val, col in (
@@ -733,7 +731,7 @@ def _paint_help(vm):
         "Observergotchi watches WiFi.",
         "It never associates, never attacks.",
         "",
-        "S / ENTER   scan now",
+        "S / SPACE   scan now",
         "A           auto scan on/off",
         "LEFT/RIGHT  auto interval",
         "L           last airwave list",
@@ -753,22 +751,62 @@ def _paint_help(vm):
     draw.swap()
 
 
+def _paint_safe_face(vm, err=None):
+    draw = vm.draw
+    pet = _state["pet"]
+    draw.fill_screen(BG)
+    name = pet.name if pet else "Observer"
+    mood = pet.mood if pet else "curious"
+    face = pet.get_face() if pet else "(._.)"
+    draw.text(Vector(8, 8), "OBSERVERGOTCHI", ACCENT, FONT_SMALL)
+    draw.text(Vector(8, 40), face, FG, FONT_SMALL)
+    draw.text(Vector(8, 64), name, GOLD, FONT_SMALL)
+    draw.text(Vector(8, 84), mood, FG, FONT_SMALL)
+    draw.text(Vector(8, 108), _state.get("status") or "ready", DIM, FONT_SMALL)
+    if err:
+        msg = str(err)
+        if len(msg) > 40:
+            msg = msg[:40]
+        draw.text(Vector(8, 140), msg, WARN, FONT_XTRA_SMALL)
+    draw.text(Vector(8, 300), "S scan  A auto  BACK quit", FG, FONT_XTRA_SMALL)
+    draw.swap()
+
+
 def _paint(vm):
     mode = _state["mode"]
-    if mode == "list":
-        _paint_list(vm)
-    elif mode == "help":
-        _paint_help(vm)
-    elif mode == "rename":
+    if mode == "rename":
         return
-    else:
-        _paint_face(vm)
-    _state["dirty"] = False
+    try:
+        if mode == "list":
+            _paint_list(vm)
+        elif mode == "help":
+            _paint_help(vm)
+        else:
+            _paint_face(vm)
+        _state["paint_ok"] = True
+        _state["dirty"] = False
+    except Exception as e:
+        _state["paint_ok"] = False
+        try:
+            _paint_safe_face(vm, e)
+        except Exception:
+            pass
+        _state["dirty"] = False
+
+
+def _reset_input(vm):
+    try:
+        vm.input_manager.reset()
+    except Exception:
+        pass
 
 
 def _begin_rename(vm):
     pet = _state["pet"]
     draw = vm.draw
+    if Keyboard is None:
+        _toast("keyboard unavailable")
+        return
     try:
         kb = Keyboard(draw, vm.input_manager, FG, BG, ACCENT)
         kb.title = "Name your Observergotchi"
@@ -807,6 +845,7 @@ def _pet_it(pet):
 
 def start(view_manager):
     vm = view_manager
+    _reset_input(vm)
     has_wifi = True
     try:
         has_wifi = bool(BOARD_HAS_WIFI)
@@ -817,14 +856,25 @@ def start(view_manager):
             has_wifi = bool(vm.has_wifi) and has_wifi
     except Exception:
         pass
-    pet = _load_pet(vm)
+    pet = None
+    try:
+        pet = _load_pet(vm)
+    except Exception:
+        pet = None
     if pet is None:
         pet = Observergotchi()
         _toast("A new Observergotchi woke up.")
     else:
-        pet.update_time()
+        try:
+            pet.update_time()
+        except Exception:
+            pass
         _toast("%s is back online." % pet.name)
-    pet.remember_sets()
+    try:
+        pet.remember_sets()
+    except Exception:
+        pet._ssid_set = {}
+        pet._bssid_set = {}
     _state["pet"] = pet
     _state["mode"] = "face"
     _state["dirty"] = True
@@ -837,8 +887,13 @@ def start(view_manager):
     _state["blink"] = 0
     _state["page"] = 0
     _state["has_wifi"] = has_wifi
-    _save_pet(vm, pet)
+    _state["boot_ignore"] = 18
+    try:
+        _save_pet(vm, pet)
+    except Exception:
+        pass
     _paint(vm)
+    _reset_input(vm)
 
 
 def stop(view_manager):
@@ -855,8 +910,23 @@ def run(view_manager):
     pet = _state["pet"]
     if pet is None:
         return
-    btn = vm.input_manager.button
+    try:
+        btn = vm.input_manager.button
+    except Exception:
+        btn = BUTTON_NONE
     now = _ticks()
+
+    ignore = int(_state.get("boot_ignore") or 0)
+    if ignore > 0:
+        _state["boot_ignore"] = ignore - 1
+        if btn != BUTTON_NONE:
+            _reset_input(vm)
+        if _state["dirty"] or (_state["blink"] % 12) == 0:
+            _state["blink"] += 1
+            _paint(vm)
+        else:
+            _state["blink"] += 1
+        return
 
     if _state["mode"] == "rename":
         kb = _state["kb"]
@@ -935,12 +1005,12 @@ def run(view_manager):
         elif btn == BUTTON_UP:
             _state["page"] = max(0, _state["page"] - 1)
             _state["dirty"] = True
-        elif btn in (BUTTON_S, BUTTON_CENTER, BUTTON_ENTER, BUTTON_SPACE):
+        elif btn in (BUTTON_S, BUTTON_SPACE):
             _do_scan(vm)
         _paint(vm)
         return
 
-    if btn in (BUTTON_S, BUTTON_CENTER, BUTTON_ENTER, BUTTON_SPACE):
+    if btn in (BUTTON_S, BUTTON_SPACE):
         _do_scan(vm)
         _paint(vm)
         return
